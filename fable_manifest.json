@@ -1,0 +1,365 @@
+{
+ "environment": "acme-soc",
+ "labs": [
+  {
+   "id": 1,
+   "title": "Data Ingestion Under Chaos",
+   "mode": "self-paced pre-work",
+   "minutes": 30,
+   "scenario": "Three collectors, one ticketing export, one Slack message from the SOC lead: 'Get me one clean table of flows with host logon context by end of day.' Every row you cannot trace to a source is a row an attacker could have inserted.",
+   "sources": {
+    "zeek_a": "data/w1/zeek_sensorA_conn.log",
+    "zeek_b": "data/w1/zeek_sensorB_conn.jsonl",
+    "flows": "data/w1/flows_export.csv",
+    "windows": "data/w1/windows/*.evtx.xml",
+    "tickets": "data/w1/tickets.csv"
+   },
+   "steps": [
+    {
+     "n": 1,
+     "title": "Load everything and watch it fail",
+     "probe": "lab1_step1",
+     "state": [
+      "zeek_a",
+      "zeek_b",
+      "flows",
+      "windows"
+     ],
+     "decision": {
+      "prompt": "How will you load the four sources?",
+      "options": {
+       "A": "pd.read_csv on all four",
+       "B": "format-specific parsers",
+       "C": "write your own"
+      }
+     },
+     "branches": [
+      "l1s1_missing",
+      "l1s1_fields_header",
+      "l1s1_infinity_text",
+      "l1s1_evtx_abort",
+      "l1s1_ok"
+     ]
+    },
+    {
+     "n": 2,
+     "title": "Fix the schema",
+     "probe": "lab1_step2",
+     "state": [
+      "flows (cleaned, with zero_duration)"
+     ],
+     "decision": {
+      "prompt": "Flow Bytes/s contains Infinity and NaN. What do you do?",
+      "options": {
+       "A": "drop the rows",
+       "B": "replace with 0",
+       "C": "replace with NaN and add a zero_duration flag"
+      }
+     },
+     "decision2": {
+      "prompt": "'Fwd Header Length' appears twice.",
+      "options": {
+       "A": "keep both",
+       "B": "prove equal, drop one"
+      }
+     },
+     "branches": [
+      "l1s2_no_flag",
+      "l1s2_dropped_rows",
+      "l1s2_zero_fill",
+      "l1s2_dup_col",
+      "l1s2_ok"
+     ]
+    },
+    {
+     "n": 3,
+     "title": "Normalise timestamps",
+     "probe": "lab1_step3",
+     "state": [
+      "ts_utc on zeek_a, zeek_b, flows, windows"
+     ],
+     "decision": {
+      "prompt": "Timezone handling?",
+      "options": {
+       "A": "parse naive",
+       "B": "assume all UTC",
+       "C": "per-source offset, convert to UTC, tz-aware"
+      }
+     },
+     "branches": [
+      "l1s3_naive",
+      "l1s3_misaligned",
+      "l1s3_folded",
+      "l1s3_win_local",
+      "l1s3_ok"
+     ]
+    },
+    {
+     "n": 4,
+     "title": "Deduplicate",
+     "probe": "lab1_step4",
+     "state": [
+      "table"
+     ],
+     "decision": {
+      "prompt": "Dedup key?",
+      "options": {
+       "A": "drop_duplicates() on all columns",
+       "B": "on uid",
+       "C": "on (src_ip, dst_ip, dst_port, proto) after dropping the ephemeral source port as noise",
+       "D": "on 5-tuple + time proximity + bytes"
+      }
+     },
+     "branches": [
+      "l1s4_no_table",
+      "l1s4_exact_only",
+      "l1s4_beacon_killed",
+      "l1s4_provenance",
+      "l1s4_ok"
+     ]
+    }
+   ]
+  },
+  {
+   "id": 2,
+   "title": "Feature Engineering and Hidden Leakage",
+   "mode": "in-class",
+   "minutes": 35,
+   "scenario": "A colleague's quick baseline hit 99.8% accuracy and there is a slide deck ready for the CISO. Find out whether the number is real before it ships.",
+   "sources": {
+    "df": "data/w1/lab2_table.pkl",
+    "enrichment_source": "pipeline_src/enrich.py"
+   },
+   "steps": [
+    {
+     "n": 1,
+     "title": "Build the initial feature set, train the quick model",
+     "probe": "lab2_step1",
+     "state": [
+      "spec",
+      "df"
+     ],
+     "branches": [
+      "l2s1_missing",
+      "l2s1_te_full",
+      "l2s1_report"
+     ]
+    },
+    {
+     "n": 2,
+     "title": "Label-shuffle test (mandatory)",
+     "probe": "lab2_step2",
+     "state": [
+      "spec",
+      "df"
+     ],
+     "branches": [
+      "l2s2_fail",
+      "l2s2_ok"
+     ]
+    },
+    {
+     "n": 3,
+     "title": "Investigate and decide per feature",
+     "probe": "lab2_step3",
+     "state": [
+      "decisions"
+     ],
+     "tools": [
+      "feature_importance",
+      "perm_importance",
+      "label_rate",
+      "single_feature_auc",
+      "ablation",
+      "top_tfidf_tokens",
+      "read pipeline_src/enrich.py"
+     ],
+     "decision": {
+      "prompt": "For each of the 18 pool columns: keep, drop, or transform, with a reason."
+     },
+     "branches": [
+      "l2s3_missing",
+      "l2s3_review",
+      "l2s3_ok"
+     ]
+    },
+    {
+     "n": 4,
+     "title": "Choose encodings",
+     "probe": "lab2_step4",
+     "state": [
+      "spec"
+     ],
+     "decision": {
+      "prompt": "Encoding for service and dst_port?",
+      "options": {
+       "A": "one-hot both",
+       "B": "ordinal",
+       "C": "target encoding on full data",
+       "D": "target encoding inside the pipeline",
+       "E": "bucket dst_port + admin-port flag"
+      }
+     },
+     "branches": [
+      "l2s4_te_full",
+      "l2s4_port_onehot",
+      "l2s4_port_ordinal",
+      "l2s4_ok"
+     ]
+    },
+    {
+     "n": 5,
+     "title": "The week-2 gate and the base-rate arithmetic",
+     "probe": "lab2_step5",
+     "state": [
+      "spec",
+      "threshold",
+      "ppv_estimate"
+     ],
+     "branches": [
+      "l2s5_gate",
+      "l2s5_ppv"
+     ]
+    }
+   ]
+  },
+  {
+   "id": 3,
+   "title": "Building a Reproducible Pipeline",
+   "mode": "homework",
+   "minutes": 25,
+   "scenario": "The platform team will run your pipeline nightly on the raw export. They will not edit anything. They will page you.",
+   "sources": {
+    "raw": "data/w1/flows_export.csv (pd.read_csv, untouched)",
+    "tickets": "data/w1/tickets.csv"
+   },
+   "steps": [
+    {
+     "n": 1,
+     "title": "Build the pipeline",
+     "probe": "lab3_step1",
+     "state": [
+      "pipe"
+     ],
+     "branches": [
+      "l3s1_missing",
+      "l3s1_no_scaler",
+      "l3s1_unknown_error",
+      "l3s1_ok"
+     ]
+    },
+    {
+     "n": 2,
+     "title": "Split the data",
+     "probe": "lab3_step2",
+     "state": [
+      "split",
+      "train_idx",
+      "test_idx",
+      "raw",
+      "y",
+      "pipe (fitted on train)"
+     ],
+     "decision": {
+      "prompt": "Which split?",
+      "options": {
+       "A": "stratified random 80/20",
+       "B": "time-ordered 80/20",
+       "C": "time-ordered with a 10-minute embargo"
+      }
+     },
+     "branches": [
+      "l3s2_missing",
+      "l3s2_leaky_scaler",
+      "l3s2_random",
+      "l3s2_time",
+      "l3s2_gap"
+     ]
+    },
+    {
+     "n": 3,
+     "title": "Validate leakage guards",
+     "probe": "lab3_step3",
+     "state": [
+      "checks"
+     ],
+     "branches": [
+      "l3s3_missing",
+      "l3s3_incomplete",
+      "l3s3_disagree",
+      "l3s3_ok"
+     ]
+    },
+    {
+     "n": 4,
+     "title": "Serialise, record the schema, run on the raw week-2 file",
+     "probe": "lab3_step4",
+     "state": [
+      "artefact_dir"
+     ],
+     "branches": [
+      "l3s4_missing",
+      "l3s4_schema",
+      "l3s4_crash",
+      "l3s4_nondeterministic",
+      "l3s4_ok"
+     ]
+    }
+   ]
+  }
+ ],
+ "messages": {
+  "l1s1_missing": "One or more of state['zeek_a'], state['zeek_b'], state['flows'], state['windows'] is missing. Load all four before submitting.",
+  "l1s1_fields_header": "Sensor-A loaded with the '#fields' line as data and every column typed object. Zeek TSV needs its header honoured and '-' treated as unset.",
+  "l1s1_infinity_text": "Your flow rate columns contain inf (pandas parsed the literal 'Infinity') or are still text. Nothing downstream will scale, split, or train on them; StandardScaler will throw in Lab 3. Fix it here: undefined is NaN, not infinity.",
+  "l1s1_evtx_abort": "One corrupt chunk killed most of a host's Security log. A collector that stops on the first bad record is a collector an attacker can silence with one malformed event. Wrap the record iterator, log the failure with the chunk offset, continue.",
+  "l1s1_ok": "All four sources are in memory with sane dtypes and the corrupt chunk did not take the host with it.",
+  "l1s2_no_flag": "state['flows'] has no zero_duration column. Undefined stays undefined; the flag preserves the signal.",
+  "l1s2_dropped_rows": "You deleted rows from the export. {pct_attack_shaped:.0%} of them are single-packet S0/REJ flows. That is the shape of reconnaissance. The defect in the exporter's rate calculation is not a defect in the record.",
+  "l1s2_zero_fill": "Rate columns are 0 where duration is 0. A one-packet flow with duration 0 has undefined rate, not zero rate. You merged two populations; Lab 2 will show this as a feature that is noisy for no reason.",
+  "l1s2_dup_col": "'Fwd Header Length' still appears twice. Any tree model will split importance across them at random and your Lab 2 importance chart will lie to you. Prove they are equal, then drop one.",
+  "l1s2_ok": "Schema aligned. Undefined rates are NaN with a zero_duration flag, the duplicate column is gone, nothing was deleted.",
+  "l1s3_naive": "Timestamps are not timezone-aware UTC on every source. A naive timestamp is a claim with no evidence.",
+  "l1s3_misaligned": "Only {align:.0%} of sensor-B rows land within 2 seconds of their sensor-A twin. Sensor-B writes local time with an offset. Until this is fixed the beacon is two interleaved series and the time split in Lab 3 will interleave sensors.",
+  "l1s3_folded": "Your flow export parses to a range that does not match the 08:00 to 14:00 UTC capture (span {span_h:.1f} h, see metrics). Look at the raw strings: 12-hour clock, no AM/PM marker. The exporter writes in arrival order, so ordering resolves it; parsing alone cannot.",
+  "l1s3_win_local": "Hosts {hosts} still report events after the capture window ended. Their SystemTime is local, not UTC. Compare each host's event span against the Zeek capture window.",
+  "l1s3_ok": "All timestamps are tz-aware UTC, sensor-B aligns with sensor-A, the export spans six hours, the local-time hosts are corrected.",
+  "l1s4_no_table": "state['table'] is missing.",
+  "l1s4_exact_only": "{rows} rows survived. You removed the log-rotation replay. You did not remove the cross-sensor twins because uid, ts and source_sensor differ. Exact-match dedup finds only the duplicates that were never going to fool anyone.",
+  "l1s4_beacon_killed": "You dropped the ephemeral source port as noise and then deduplicated. You destroyed the beacon: {beacon} of 360 heartbeat flows survive. A host repeating the same connection every 60 seconds is one of the highest-value signals in this dataset and your dedup rule called it a duplicate.",
+  "l1s4_provenance": "Rows are missing source_sensor, source_file or row_hash. You cannot answer 'which sensor produced this row' anymore. If sensor-B starts feeding fabricated flows you have no way to isolate them. This is the ingestion poisoning control.",
+  "l1s4_ok": "{rows} rows, beacon intact ({beacon}), twins merged with both sensors recorded on the survivor. Provenance on every row. Ready for Lab 2.",
+  "l2s1_missing": "state['spec'] and state['df'] are required.",
+  "l2s1_te_full": "A column ending in _te is in your spec. target_encode_full wrote the label into that column using every row. Your cross-validation is now scoring on labels it was supposed to be blind to.",
+  "l2s1_report": "Random 3-fold CV: accuracy {accuracy:.3f}, ROC-AUC {roc_auc:.3f}, PR-AUC {pr_auc:.3f}. Your model is ready for the CISO deck. Before you send it, run the label-shuffle test.",
+  "l2s2_fail": "Shuffled-label PR-AUC is {shuffle:.3f}; the base rate is {base:.3f}. A model that scores above chance on random labels is reading the label from a feature. Find the feature that was built from the label.",
+  "l2s2_ok": "Shuffled-label PR-AUC {shuffle:.3f} sits at the base rate. The model learns something in the labels. Now: is it learning the attack, or the labelling process?",
+  "l2s3_missing": "state['decisions'] must map every column in the feature pool to {{'action': keep|drop|transform, 'reason': ...}}.",
+  "l2s3_review": "Decisions reviewed. {n_wrong} need another look:\n{notes}",
+  "l2s3_ok": "Every leak is out or transformed to past-only, and you kept the genuine signal. The honest week-1 number will be lower. That is the correct outcome.",
+  "l2s4_te_full": "Target encoding was fitted on the full dataset before splitting. Your shuffle test passed ({shuffle:.3f}) because the encoded column was computed before you shuffled; the shuffle test catches a leak only when feature construction is rerun after shuffling. Rerun on shuffled labels and your column scores {shuffle_recomputed:.3f}: low cardinality hides it here. The same construction on src_port ({card} values) scores {demo:.3f} on random labels. The construction is the leak, not the column. Fit encoders inside the pipeline.",
+  "l2s4_port_onehot": "dst_port one-hot explodes to thousands of columns; every port seen once becomes a memorised attack indicator. It works and it will not survive week 2.",
+  "l2s4_port_ordinal": "Port 445 is not less than port 3389. Trees tolerate this; anything with a distance metric does not, and you reuse these features with cosine similarity in Module 3.",
+  "l2s4_ok": "Encodings fitted inside the pipeline. Ports bucketed with an admin-port flag.",
+  "l2s5_gate": "Week-1 CV PR-AUC {w1:.3f}. Week-2 PR-AUC {w2:.3f} (base rate {base:.4f}, {pos} positives, threshold to pass {thr:.2f}). {verdict}",
+  "l2s5_ppv": "At threshold {threshold}: TP {tp}, FP {fp}, PPV {ppv:.3f}, {hours:.1f} analyst hours per true positive. Your hand-computed PPV was {yours}; {ppv_verdict}",
+  "l3s1_missing": "state['pipe'] must be an sklearn Pipeline.",
+  "l3s1_no_scaler": "No StandardScaler (or equivalent) inside the pipeline. Scaling done outside the artefact is scaling the platform team will never run.",
+  "l3s1_unknown_error": "OneHotEncoder is set to error on unknown categories. Silent now. The platform team gets paged at 03:00 the night a new protocol appears.",
+  "l3s1_ok": "Pipeline structure accepted. Whether the cleaning is really inside it will be tested on the raw week-2 file.",
+  "l3s2_missing": "state['split'], state['train_idx'], state['test_idx'], state['raw'], state['y'] are required and state['pipe'] must be fitted on the train rows.",
+  "l3s2_random": "Random split: week-1 test PR-AUC {w1:.3f}. Week-2 reality: {w2:.3f}. The time split's estimate on the same data was {w1_time:.3f}. One of these numbers told you approximately the truth about the future; the other told you a story about the past. Attacks come in sessions and sessions straddle random splits.",
+  "l3s2_time": "Time split: week-1 test PR-AUC {w1:.3f}. Week-2 reality: {w2:.3f}. The random split would have reported {w1_random:.3f}. Your estimate is honest. Sessions still straddle the boundary; an embargo gap fixes that.",
+  "l3s2_gap": "Time split with embargo: week-1 test PR-AUC {w1:.3f}. Week-2 reality: {w2:.3f}. The random split would have reported {w1_random:.3f}.",
+  "l3s2_leaky_scaler": "The scaler inside your pipeline saw {seen} rows; the train partition has {train}. Its statistics include rows the model is supposed to be blind to. Preprocessing leakage is invisible in your metrics.",
+  "l3s3_missing": "state['checks'] must be a dict of named boolean assertions.",
+  "l3s3_disagree": "Your assertions and the grader disagree: {diff}. An assertion that passes when the condition is false is worse than no assertion.",
+  "l3s3_incomplete": "Missing assertions: {missing}. The session check matters most: the beacon is 360 rows of one session and some of them are in your test set.",
+  "l3s3_ok": "All leakage guards present and independently verified. Shuffled-label PR-AUC {shuffle:.3f}.",
+  "l3s4_missing": "state['artefact_dir'] must contain feature_pipeline.joblib and schema.json.",
+  "l3s4_crash": "The platform team just got paged. Running your artefact on the raw week-2 export raised: {error}",
+  "l3s4_nondeterministic": "Two fresh-process runs produced different predictions. Something in the pipeline is unseeded.",
+  "l3s4_schema": "schema.json is missing: {missing}. In Module 7 the ML-BOM and signing steps build on this file.",
+  "l3s4_ok": "Artefact ran end to end on the raw week-2 export with no manual edits. Week-2 PR-AUC {w2:.3f} (threshold {thr:.2f}). Two fresh-process runs agree (prediction hash {h}). joblib wrote a pickle: loading one executes code. Record the hash, treat the file as executable."
+ }
+}
